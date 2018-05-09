@@ -8,12 +8,12 @@ workflow atac {
 		# define up to 4 replicates
 		# [rep_id] is for each replicate
 
- 	### fastqs and adapters  	
+ 	### fastqs and adapters
 	 	# define fastqs either with DNANexus style (1-dim array) or with default one (3-dim array)
 	 	# [merge_id] is for pooing fastqs after trimming adapters
 	 	# if adapters defined with any style, keep the same structure/dimension as fastq arrays
 	 	# only defined adapters will be trimmed
-	 	# or undefined adapters will be detected/trimmed by trim_adapter.auto_detect_adapter=true 
+	 	# or undefined adapters will be detected/trimmed by trim_adapter.auto_detect_adapter=true
 	 	# so you can selectively detect/trim adapters for a specific fastq
  	## DNANexus UI style fastq/adapter definition
 	Array[File] fastqs_rep1_R1 = []	# [merge_id]
@@ -25,7 +25,7 @@ workflow atac {
 	Array[File] fastqs_rep4_R1 = [] # do not define if you have <=3 replicates
 	Array[File] fastqs_rep4_R2 = []	# do not define _R2 array if your sample is not paired end
 	Array[String] adapters_rep1_R1 = [] # [merge_id]
-	Array[String] adapters_rep1_R2 = [] 
+	Array[String] adapters_rep1_R2 = []
 	Array[String] adapters_rep2_R1 = []
 	Array[String] adapters_rep2_R2 = []
 	Array[String] adapters_rep3_R1 = []
@@ -67,7 +67,7 @@ workflow atac {
 	Int multimapping = 0			# for multimapping reads
 
 	### task-specific variables but defined in workflow level (limit of WDL)
-	## optional for MACS2 
+	## optional for MACS2
 	Int cap_num_peak = 300000	# cap number of raw peaks called from MACS2
 	Float pval_thresh = 0.01	# p.value threshold
 	Int smooth_win = 150		# size of smoothing window
@@ -93,7 +93,11 @@ workflow atac {
 	String gensz = read_genome_tsv.genome['gensz']
     #@call dummy { input: f = blacklist } # dummy due to dxWDL 60.1 bug
 
-	### pipeline starts here
+        Boolean trim_adapter_auto_detect_adapter
+ 	String? qc_report_name # name of sample
+	String? qc_report_desc # description for sample
+
+        ### pipeline starts here
 	# temporary 2-dim arrays for DNANexus style fastqs and adapters
 	Array[Array[File]] fastqs_rep1 = transpose([fastqs_rep1_R1,fastqs_rep1_R2])
 	Array[Array[File]] fastqs_rep2 = transpose([fastqs_rep2_R1,fastqs_rep2_R2])
@@ -113,13 +117,14 @@ workflow atac {
 		else if length(adapters_rep2)<1 then [adapters_rep1]
 		else if length(adapters_rep3)<1 then [adapters_rep1,adapters_rep2]
 		else if length(adapters_rep4)<1 then [adapters_rep1,adapters_rep2,adapters_rep3]
-		else [adapters_rep1,adapters_rep2,adapters_rep3,adapters_rep4]	
+		else [adapters_rep1,adapters_rep2,adapters_rep3,adapters_rep4]
 	scatter( i in range(length(fastqs_)) ) {
 		# trim adapters and merge trimmed fastqs
 		call trim_adapter { input :
 			fastqs = fastqs_[i],
 			adapters = if length(adapters_)>0 then adapters_[i] else [],
 			paired_end = paired_end,
+                        auto_detect_adapter = trim_adapter_auto_detect_adapter
 		}
 		# align trimmed/merged fastqs with bowtie2s
 		call bowtie2 { input :
@@ -206,7 +211,7 @@ workflow atac {
 			ta = ta,
 			paired_end = paired_end,
 		}
-		# call peaks on 1st pseudo replicated tagalign 
+		# call peaks on 1st pseudo replicated tagalign
 		call macs2 as macs2_pr1 { input :
 			ta = spr.ta_pr1,
 			gensz = gensz,
@@ -220,7 +225,7 @@ workflow atac {
 			disks = macs2_disks,
 			time_hr = macs2_time_hr,
 		}
-		# call peaks on 2nd pseudo replicated tagalign 
+		# call peaks on 2nd pseudo replicated tagalign
 		call macs2 as macs2_pr2 { input :
 			ta = spr.ta_pr2,
 			gensz = gensz,
@@ -279,7 +284,7 @@ workflow atac {
 	Array[File] peaks_ = if align_only then [] else flatten([macs2.npeak, peaks])
 
 	# generate all possible pairs of true replicates (pair: left=prefix, right=[peak1,peak2])
-	Array[Pair[String,Array[File]]] peak_pairs_overlap =  
+	Array[Pair[String,Array[File]]] peak_pairs_overlap =
 		if length(peaks_)<=1 then [] # 1 rep
 		else if length(peaks_)<=2 then # 2 reps
 			 [('rep1-rep2',[peaks_[0],peaks_[1]])]
@@ -307,7 +312,7 @@ workflow atac {
 	Array[Pair[String,Array[File]]] peak_pairs_idr = if !enable_idr then [] else peak_pairs_overlap
 	scatter( pair in peak_pairs_idr ) {
 		# IDR on every pair of true replicates
-		call idr { input : 
+		call idr { input :
 			prefix = pair.left,
 			peak1 = pair.right[0],
 			peak2 = pair.right[1],
@@ -321,7 +326,7 @@ workflow atac {
 			ta = [select_first([pool_ta.ta_pooled])],
 		}
 	}
-	
+
 	# NEED TO CHECK AFTER dxWDL BUG FIXED
 	# dxWDL 60.1 bug
 	# could not use tas_[i] in the following scatter block because task overlap's File? ta
@@ -332,7 +337,7 @@ workflow atac {
 	Array[File] peaks_pr2_overlap = flatten([macs2_pr2.npeak, peaks_pr2])
 	scatter( i in range(length(peaks_pr1_overlap)) ) {
 		# Naive overlap on pseduo replicates
-		call overlap as overlap_pr { input : 
+		call overlap as overlap_pr { input :
 			prefix = "rep"+(i+1)+"-pr",
 			peak1 = peaks_pr1_overlap[i],
 			peak2 = peaks_pr2_overlap[i],
@@ -348,7 +353,7 @@ workflow atac {
 	Array[File] peaks_pr2_idr = if !enable_idr then [] else peaks_pr2_overlap
 	scatter( i in range(length(peaks_pr1_idr)) ) {
 		# IDR on pseduo replicates
-		call idr as idr_pr { input : 
+		call idr as idr_pr { input :
 			prefix = "rep"+(i+1)+"-pr",
 			peak1 = peaks_pr1_idr[i],
 			peak2 = peaks_pr2_idr[i],
@@ -362,12 +367,12 @@ workflow atac {
 			ta = tas_overlap[i]
 		}
 	}
-	# not an array but due to dxWDL limit	
+	# not an array but due to dxWDL limit
 	Array[File] peak_ppr1_overlap = select_all([macs2_ppr1.npeak, peak_ppr1])
 	Array[File] peak_ppr2_overlap = select_all([macs2_ppr2.npeak, peak_ppr2])
 	if ( length(peak_ppr1_overlap)>0 ) {
 		# Naive overlap on pooled pseudo replicates
-		call overlap as overlap_ppr { input : 
+		call overlap as overlap_ppr { input :
 			prefix = "ppr",
 			peak1 = peak_ppr1_overlap[0],
 			peak2 = peak_ppr2_overlap[0],
@@ -380,11 +385,11 @@ workflow atac {
 		}
 	}
 	# not an array but due to dxWDL limit
-	Array[File] peak_ppr1_idr = if !enable_idr then [] else peak_ppr1_overlap 
+	Array[File] peak_ppr1_idr = if !enable_idr then [] else peak_ppr1_overlap
 	Array[File] peak_ppr2_idr = if !enable_idr then [] else peak_ppr2_overlap
 	if ( length(peak_ppr1_idr)>0 ) {
 		# IDR on pooled pseduo replicates
-		call idr as idr_ppr { input : 
+		call idr as idr_ppr { input :
 			prefix = "ppr",
 			peak1 = peak_ppr1_idr[0],
 			peak2 = peak_ppr2_idr[0],
@@ -416,8 +421,10 @@ workflow atac {
 			peak_ppr = idr_ppr.bfilt_idr_peak,
 		}
 	}
-	# Generate final QC report and JSON		
+	# Generate final QC report and JSON
 	call qc_report { input :
+                name = qc_report_name,
+                desc = qc_report_desc,
 		paired_end = paired_end,
 		pipeline_type = pipeline_type,
 		peak_caller = 'macs2',
@@ -465,8 +472,8 @@ task trim_adapter { # trim adapters and merge trimmed fastqs
 	Boolean auto_detect_adapter		# automatically detect/trim adapters
 	# optional
 	Int? min_trim_len 		# minimum trim length for cutadapt -m
-	Float? err_rate			# Maximum allowed adapter error rate 
-							# for cutadapt -e	
+	Float? err_rate			# Maximum allowed adapter error rate
+							# for cutadapt -e
 	# resource
 	Int? cpu
 	Int? mem_mb
@@ -547,13 +554,13 @@ task filter {
 	Boolean paired_end
 	Int? multimapping
 	# optional
-	String? dup_marker 				# picard.jar MarkDuplicates (picard) or 
+	String? dup_marker 				# picard.jar MarkDuplicates (picard) or
 									# sambamba markdup (sambamba)
 	Int? mapq_thresh				# threshold for low MAPQ reads removal
 	Boolean? no_dup_removal 		# no dupe reads removal when filtering BAM
 									# dup.qc and pbc.qc will be empty files
-									# and nodup_bam in the output is 
-	# resource						# filtered bam with dupes	
+									# and nodup_bam in the output is
+	# resource						# filtered bam with dupes
 	Int? cpu
 	Int? mem_mb
 	Int? time_hr
@@ -594,7 +601,7 @@ task bam2ta {
 	Boolean paired_end
 	Boolean disable_tn5_shift 	# no tn5 shifting (it's for dnase-seq)
 	# optional
-	String? regex_grep_v_ta   	# Perl-style regular expression pattern 
+	String? regex_grep_v_ta   	# Perl-style regular expression pattern
                         		# to remove matching reads from TAGALIGN
 	Int? subsample 				# number of reads to subsample TAGALIGN
 								# this affects all downstream analysis
@@ -681,7 +688,7 @@ task xcor {
 					# will not affect any downstream analysis
 	# resource
 	Int? cpu
-	Int? mem_mb	
+	Int? mem_mb
 	Int? time_hr
 	String? disks
 
@@ -711,7 +718,7 @@ task xcor {
 task macs2 {
 	# parameters from workflow
 	File ta
-	String gensz		# Genome size (sum of entries in 2nd column of 
+	String gensz		# Genome size (sum of entries in 2nd column of
                         # chr. sizes file, or hs for human, ms for mouse)
 	File chrsz			# 2-col chromosome sizes file
 	Int? cap_num_peak	# cap number of raw peaks called from MACS2
@@ -734,11 +741,11 @@ task macs2 {
 			${"--smooth-win "+ select_first([smooth_win,150])} \
 			${if select_first([make_signal,false]) then "--make-signal" else ""} \
 			${"--blacklist "+ blacklist}
-		
+
 		# ugly part to deal with optional outputs with Google JES backend
-		${if select_first([make_signal,false]) then "" 
+		${if select_first([make_signal,false]) then ""
 			else "touch null.pval.signal.bigwig null.fc.signal.bigwig"}
-		touch null 
+		touch null
 	}
 	output {
 		File npeak = glob("*[!.][!b][!f][!i][!l][!t].narrowPeak.gz")[0]
@@ -759,13 +766,13 @@ task macs2 {
 task idr {
 	# parameters from workflow
 	String? prefix 		# prefix for IDR output file
-	File peak1 			
+	File peak1
 	File peak2
 	File peak_pooled
 	Float? idr_thresh
 	File blacklist 	# blacklist BED to filter raw peaks
 	# parameters to compute FRiP
-	# NEED TO CHECK AFTER dxWDL BUG FIXED	
+	# NEED TO CHECK AFTER dxWDL BUG FIXED
 	Array[File] ta		# to calculate FRiP (not an array but due to dxWDL 60.1 bug)
 	File chrsz			# 2-col chromosome sizes file
 	String peak_type
@@ -783,8 +790,8 @@ task idr {
 			${if length(ta)>0 then "--ta " + ta[0] else ""}
 
 		# ugly part to deal with optional outputs with Google backend
-		${if length(ta)>0 then "" else "touch null.frip.qc"}			
-		touch null 
+		${if length(ta)>0 then "" else "touch null.frip.qc"}
+		touch null
 	}
 	output {
 		File idr_peak = glob("*[!.][!b][!f][!i][!l][!t]."+peak_type+".gz")[0]
@@ -800,7 +807,7 @@ task idr {
 		memory : "4000 MB"
 		time : 1
 		disks : "local-disk 50 HDD"
-	}	
+	}
 }
 
 task overlap {
@@ -811,7 +818,7 @@ task overlap {
 	File peak_pooled
 	File blacklist 	# blacklist BED to filter raw peaks
 	# parameters to compute FRiP
-	# NEED TO CHECK AFTER dxWDL BUG FIXED	
+	# NEED TO CHECK AFTER dxWDL BUG FIXED
 	Array[File] ta		# to calculate FRiP (not an array but due to dxWDL bug)
 	File chrsz			# 2-col chromosome sizes file
 	String peak_type
@@ -826,8 +833,8 @@ task overlap {
 			${if length(ta)>0 then "--ta " + ta[0] else ""}
 
 		# ugly part to deal with optional outputs with Google backend
-		${if length(ta)>0 then "" else "touch null.frip.qc"}			
-		touch null 
+		${if length(ta)>0 then "" else "touch null.frip.qc"}
+		touch null
 	}
 	output {
 		File overlap_peak = glob("*[!.][!b][!f][!i][!l][!t]."+peak_type+".gz")[0]
@@ -840,7 +847,7 @@ task overlap {
 		memory : "4000 MB"
 		time : 1
 		disks : "local-disk 50 HDD"
-	}	
+	}
 }
 
 task reproducibility {
@@ -872,7 +879,7 @@ task reproducibility {
 	}
 }
 
-# gather all outputs and generate 
+# gather all outputs and generate
 # - qc.html		: organized final HTML report
 # - qc.json		: all QCs
 task qc_report {
@@ -899,11 +906,11 @@ task qc_report {
 	Array[File] frip_macs2_qcs_pr1
 	Array[File] frip_macs2_qcs_pr2
 	File? frip_macs2_qc_pooled
-	File? frip_macs2_qc_ppr1 
-	File? frip_macs2_qc_ppr2 
+	File? frip_macs2_qc_ppr1
+	File? frip_macs2_qc_ppr2
 	Array[File] frip_idr_qcs
 	Array[File] frip_idr_qcs_pr
-	File? frip_idr_qc_ppr 
+	File? frip_idr_qc_ppr
 	Array[File] frip_overlap_qcs
 	Array[File] frip_overlap_qcs_pr
 	File? frip_overlap_qc_ppr
@@ -946,7 +953,7 @@ task qc_report {
 			${"--overlap-reproducibility-qc " + overlap_reproducibility_qc} \
 			--out-qc-html qc.html \
 			--out-qc-json qc.json
-		
+
 		diff qc.json ${tmp} | wc -l > qc_json_match.txt
 	}
 	output {
@@ -959,7 +966,7 @@ task qc_report {
 		cpu : 1
 		memory : "4000 MB"
 		time : 1
-		disks : "local-disk 50 HDD"		
+		disks : "local-disk 50 HDD"
 	}
 }
 
@@ -975,7 +982,7 @@ task read_genome_tsv {
 		cpu : 1
 		memory : "4000 MB"
 		time : 1
-		disks : "local-disk 50 HDD"		
+		disks : "local-disk 50 HDD"
 	}
 }
 
@@ -985,7 +992,7 @@ task compare_md5sum {
 	Array[File] ref_files
 
 	command <<<
-		python <<CODE	
+		python <<CODE
 		from collections import OrderedDict
 		import os
 		import json
@@ -1043,7 +1050,7 @@ task compare_md5sum {
 			if matched:
 				result['succeeded_task_labels'].append(label)
 			else:
-				result['failed_task_labels'].append(label)		
+				result['failed_task_labels'].append(label)
 		result['match_overall'] = match_overall
 
 		with open('result.json','w') as fp:
@@ -1068,6 +1075,6 @@ task compare_md5sum {
 		cpu : 1
 		memory : "4000 MB"
 		time : 1
-		disks : "local-disk 50 HDD"		
+		disks : "local-disk 50 HDD"
 	}
 }
